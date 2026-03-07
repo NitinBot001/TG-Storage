@@ -34,4 +34,4 @@ COPY --chown=appuser:appuser . .
 EXPOSE 8082
 
 # Command to run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:8082", "--workers", "4", "--threads", "2", "server:app"]
+CMD ["python", "server.py"]
