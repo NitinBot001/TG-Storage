@@ -32,4 +32,4 @@ COPY --chown=appuser:appuser . .
 EXPOSE 8082
 
 # Command to run the application
-CMD ["gunicorn", "main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8082"]
+CMD ["gunicorn", "main:app", "-w", "4", "--bind", "0.0.0.0:8082"]

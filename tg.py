@@ -8,7 +8,7 @@ Bot pool:
   • Round-robins uploads across all healthy bots to spread rate-limit load.
 
 Upload flow:
-  sendDocument  →  returns message_id + file_id  →  stored in MongoDB.
+  sendDocument  →  returns message_id + file_id  →  stored in Supabase.
 
 Download flow (two-stage):
   1. getFile(file_id)          →  get a temporary download path from Telegram.
@@ -34,30 +34,28 @@ TG_API  = "https://api.telegram.org/bot{token}/{method}"
 TG_FILE = "https://api.telegram.org/file/bot{token}/{file_path}"
 
 # Telegram hard limit for getFile downloads via Bot API is 20 MB.
-# Files larger than this must be sent as separate parts (chunking) or
-# via a Telegram client (MTProto). We warn but still attempt.
 TG_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 
 TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=120.0, pool=10.0)
 
 
 # ──────────────────────────────────────────────────────────────────────
-#  Shared async HTTP client (one per process)
+#  Shared sync HTTP client (one per process)
 # ──────────────────────────────────────────────────────────────────────
-_http: httpx.AsyncClient | None = None
+_http: httpx.Client | None = None
 
-def _client() -> httpx.AsyncClient:
+def _client() -> httpx.Client:
     global _http
     if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True)
+        _http = httpx.Client(timeout=TIMEOUT, follow_redirects=True)
     return _http
 
 
-async def close_http():
+def close_http():
     """Call on app shutdown to cleanly drain the connection pool."""
     global _http
     if _http and not _http.is_closed:
-        await _http.aclose()
+        _http.close()
         _http = None
 
 
@@ -80,11 +78,11 @@ def _tokens_path() -> Path:
     )
 
 
-async def _verify_token(token: str) -> dict | None:
+def _verify_token(token: str) -> dict | None:
     """Call getMe to validate a token. Returns bot info dict or None."""
     url = TG_API.format(token=token, method="getMe")
     try:
-        r = await _client().get(url)
+        r = _client().get(url)
         data = r.json()
         if data.get("ok"):
             bot = data["result"]
@@ -95,7 +93,7 @@ async def _verify_token(token: str) -> dict | None:
     return None
 
 
-async def init_bot_pool():
+def init_bot_pool():
     """
     Read tokens.txt, verify each token with getMe(), build the round-robin pool.
     Raises RuntimeError if no healthy bots are found.
@@ -114,7 +112,7 @@ async def init_bot_pool():
 
     healthy = []
     for token in raw_tokens:
-        info = await _verify_token(token)
+        info = _verify_token(token)
         if info:
             logger.info(f"✓ Bot ready: @{info['username']} (id={info['id']})")
             healthy.append(info)
@@ -158,13 +156,13 @@ def _get_channel_id() -> int:
 #  Low-level API helpers
 # ──────────────────────────────────────────────────────────────────────
 
-async def _api(token: str, method: str, **kwargs) -> dict:
+def _api(token: str, method: str, **kwargs) -> dict:
     """
     POST to a Bot API method with JSON body.
     Raises RuntimeError on non-ok responses.
     """
     url = TG_API.format(token=token, method=method)
-    r = await _client().post(url, **kwargs)
+    r = _client().post(url, **kwargs)
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(
@@ -178,7 +176,7 @@ async def _api(token: str, method: str, **kwargs) -> dict:
 #  Upload
 # ──────────────────────────────────────────────────────────────────────
 
-async def upload_to_telegram(
+def upload_to_telegram(
     content: bytes,
     filename: str,
     mime_type: str,
@@ -197,7 +195,7 @@ async def upload_to_telegram(
     }
 
     try:
-        msg = await _api(
+        msg = _api(
             bot["token"], "sendDocument",
             data=payload,
             files=files,
@@ -221,7 +219,7 @@ async def upload_to_telegram(
 #  Download
 # ──────────────────────────────────────────────────────────────────────
 
-async def download_from_telegram(
+def download_from_telegram(
     tg_message_id: int,
     tg_file_id: str | None,
 ) -> bytes:
@@ -242,7 +240,7 @@ async def download_from_telegram(
 
     if tg_file_id:
         try:
-            result    = await _api(bot["token"], "getFile", json={"file_id": tg_file_id})
+            result    = _api(bot["token"], "getFile", json={"file_id": tg_file_id})
             file_path = result.get("file_path")
         except RuntimeError as e:
             logger.warning(f"getFile failed for file_id {tg_file_id[:24]}…, trying message fallback. ({e})")
@@ -250,7 +248,7 @@ async def download_from_telegram(
     # ── Stage 2: message fallback if file_id is stale ───────────────
     if not file_path:
         try:
-            fwd = await _api(bot["token"], "forwardMessage", json={
+            fwd = _api(bot["token"], "forwardMessage", json={
                 "chat_id":      channel_id,
                 "from_chat_id": channel_id,
                 "message_id":   tg_message_id,
@@ -265,7 +263,7 @@ async def download_from_telegram(
         if not doc:
             raise ValueError(f"Message {tg_message_id} contains no document.")
 
-        result    = await _api(bot["token"], "getFile", json={"file_id": doc["file_id"]})
+        result    = _api(bot["token"], "getFile", json={"file_id": doc["file_id"]})
         file_path = result.get("file_path")
 
     if not file_path:
@@ -273,7 +271,7 @@ async def download_from_telegram(
 
     # ── Stage 3: download bytes ──────────────────────────────────────
     url = TG_FILE.format(token=bot["token"], file_path=file_path)
-    r   = await _client().get(url)
+    r   = _client().get(url)
 
     if r.status_code != 200:
         raise RuntimeError(f"File download failed: HTTP {r.status_code} from Telegram CDN.")
