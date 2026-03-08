@@ -877,6 +877,8 @@
     //  Helpers
     // ──────────────────────────────────────────────
     const $ = id => document.getElementById(id);
+    const baseUrlinput = document.getElementById("baseUrl");
+    baseUrlinput.value = window.location.origin;
 
     function cfg() {
       return {
