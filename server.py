@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 load_dotenv()  # load .env before importing app so env vars are available
 
 from main import app
+from flask_cors import CORS
+
+CORS(app)
 
 if __name__ == "__main__":
     app.run(
